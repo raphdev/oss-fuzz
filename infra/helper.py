@@ -25,6 +25,7 @@ import errno
 import logging
 import os
 import pipes
+import platform
 import re
 import shutil
 import subprocess
@@ -555,6 +556,7 @@ def _add_environment_args(parser):
 def build_image_impl(project, cache=True, pull=False, architecture='x86_64'):
   """Builds image."""
   image_name = project.name
+  host_architecture = 'aarch64' if platform.machine() == 'arm64' else platform.machine()
 
   if is_base_image(image_name):
     image_project = 'oss-fuzz-base'
@@ -573,12 +575,14 @@ def build_image_impl(project, cache=True, pull=False, architecture='x86_64'):
 
   build_args = []
   image_name = 'gcr.io/%s/%s' % (image_project, image_name)
-  if architecture == 'aarch64':
+  if host_architecture != architecture:
+    logging.warning("Host architecture doesn't match target architecture! Cross-compiling.")
+    logging.debug(f"Platform: {platform.machine()} - host_architecture = {host_architecture}. Target architecture: {architecture}")
     build_args += [
         'buildx',
         'build',
         '--platform',
-        'linux/arm64',
+        f'linux/{"arm64" if architecture == "aarch64" else "amd64"}',
         '--progress',
         'plain',
         '--load',
@@ -589,7 +593,7 @@ def build_image_impl(project, cache=True, pull=False, architecture='x86_64'):
   build_args += ['-t', image_name, '--file', dockerfile_path]
   build_args.append(docker_build_dir)
 
-  if architecture == 'aarch64':
+  if architecture != host_architecture:
     command = ['docker'] + build_args
     subprocess.check_call(command)
     return True
@@ -1267,7 +1271,7 @@ def run_fuzzer(args):
   if not check_project_exists(args.project):
     return False
 
-  if not _check_fuzzer_exists(args.project, args.fuzzer_name):
+  if not _check_fuzzer_exists(args.project, args.fuzzer_name, args.architecture):
     return False
 
   env = [
@@ -1455,7 +1459,7 @@ def _generate_impl(project, language):
 
 def shell(args):
   """Runs a shell within a docker image."""
-  if not build_image_impl(args.project):
+  if not build_image_impl(args.project, architecture=args.architecture):
     return False
 
   env = [
